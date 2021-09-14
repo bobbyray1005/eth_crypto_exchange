@@ -1,0 +1,345 @@
+<template>
+  <v-layout v-if="isLoaded" align-center justify-center>
+    <v-flex style="max-width: 650px">
+      <v-card outlined style="max-width: 650px">
+        <v-card-text>
+          <p class="title">ADMIN TODO</p>
+
+          <p class="headline primary--text">
+            Rewards Available: {{ spiRewardsBalance }}
+          </p>
+
+          <p class="headline primary--text">
+            Emission Rate:
+            {{ emissionRate }}
+          </p>
+
+          <p>(seconds since staked) X emission rate X amount / 10^18</p>
+        </v-card-text>
+      </v-card>
+
+      <v-card class="mt-5" outlined style="max-width: 650px">
+        <v-card-text><span class="title">Stake Parameters</span></v-card-text>
+        <v-card-text>
+          <p class="grey--text">Minimum Amount: 0.01 SPI</p>
+          <p class="grey--text">Maximum Amount: 1000 SPI</p>
+          <p class="grey--text">Lock Time: 1 hour</p>
+          <v-container>
+            <v-row>
+              <v-col cols="8" sm="12" md="8">
+                <v-text-field
+                  v-model="newEmissionRate"
+                  outlined
+                  label="Change Emission Rate*"
+                  required
+                ></v-text-field>
+                <p>10000000000 = 0.01 SPI per 1 SPI staked for ~11 days</p>
+              </v-col>
+              <v-col cols="12" sm="12" md="12">
+                <v-btn
+                  rounded
+                  outlined
+                  class="primary white--text"
+                  @click="changeEmissionRate()"
+                >
+                  Change Emission Rate
+                </v-btn>
+              </v-col>
+            </v-row>
+          </v-container>
+        </v-card-text>
+      </v-card>
+
+      <v-card class="mt-5" outlined style="max-width: 650px">
+        <v-card-text><span class="title">Add Rewards</span></v-card-text>
+        <v-card-text>
+          <p class="red--text">
+            There should ALWAYS be rewards in the contract
+          </p>
+
+          <p class="primary--text">Your allowance: {{ yourAllowance }} SPI</p>
+
+          <v-container class="mb-5">
+            <v-row>
+              <v-col cols="8" sm="12" md="8">
+                <v-text-field
+                  v-model="newAllowance"
+                  outlined
+                  label="New Allowance (SPI)"
+                  required
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="12" md="12">
+                <v-btn
+                  rounded
+                  outlined
+                  class="primary white--text"
+                  @click="increaseAllowance()"
+                >
+                  INCREASE ALLOWANCE
+                </v-btn>
+              </v-col>
+            </v-row>
+          </v-container>
+
+          <v-container class="mt-5">
+            <v-row>
+              <v-col cols="8" sm="12" md="8">
+                <v-text-field
+                  v-model="addRewardsAmount"
+                  outlined
+                  label="SPI Tokens as Rewards*"
+                  required
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="12" md="12">
+                <v-btn
+                  rounded
+                  outlined
+                  class="primary white--text"
+                  @click="addRewards()"
+                >
+                  ADD REWARDS
+                </v-btn>
+              </v-col>
+            </v-row>
+          </v-container>
+        </v-card-text>
+      </v-card>
+
+      <v-card class="mt-5" outlined style="max-width: 650px">
+        <v-card-text>
+          <v-container>
+            <v-row>
+              <v-col cols="6" sm="12" md="6">
+                <v-btn
+                  v-if="!isPaused"
+                  outlined
+                  rounded
+                  class="error white--text"
+                  @click="pause()"
+                >
+                  PAUSE
+                </v-btn>
+              </v-col>
+              <v-col cols="6" sm="12" md="6">
+                <v-btn
+                  v-if="isPaused"
+                  outlined
+                  rounded
+                  class="white--text success"
+                  @click="unpause()"
+                >
+                  UNPAUSE
+                </v-btn>
+              </v-col>
+            </v-row>
+          </v-container>
+        </v-card-text>
+      </v-card>
+    </v-flex>
+  </v-layout>
+</template>
+
+<script>
+import { ethers } from 'ethers'
+import { STAKE_CONTRACT_ADDR, SPI_CONTRACT_ADDR } from '../../constants'
+import { STAKING_ABI } from '../../exchange_abi'
+import { ERC20_ABI } from '../../erc20_abi'
+const EthersUtils = require('ethers').utils
+
+export default {
+  auth: false,
+  data() {
+    return {
+      id: null,
+      newAllowance: 0,
+      newEmissionRate: 0,
+      showStakeCard: true,
+      stakeContract: null,
+      spiContract: null,
+      addRewardsAmount: 0,
+      stakeContractAddress: null,
+      stakeNumberTokens: '',
+      ethers: null,
+      spiRewardsBalance: 0,
+      signer: null,
+      yourAllowance: 0,
+      provider: null,
+      isPaused: false,
+      isLoaded: false,
+      emissionRate: 0,
+      userInfo: {},
+      pointsBalance: null,
+      stakedAmount: 0,
+      pointsDebt: 0,
+    }
+  },
+  mounted() {
+    this.stakeContractAddress = STAKE_CONTRACT_ADDR
+    this.checkMetamaskConnected()
+  },
+  methods: {
+    async initialize() {
+      console.log('initialize called..')
+
+      this.emissionRate = await this.stakeContract.emissionRate()
+      const owner = await this.stakeContract.owner()
+      console.log('owner :>> ', owner)
+      if (owner !== this.account) {
+        this.$router.push('/other/only_owner_allowed')
+      }
+      this.isLoaded = true
+
+      // load your allowance
+      this.yourAllowance = await this.spiContract.allowance(
+        owner,
+        STAKE_CONTRACT_ADDR
+      )
+      this.yourAllowance = EthersUtils.formatUnits(this.yourAllowance, 18)
+      this.isPaused = await this.stakeContract.paused()
+      this.spiRewardsBalance = await this.spiContract.balanceOf(
+        STAKE_CONTRACT_ADDR
+      )
+      this.spiRewardsBalance = EthersUtils.formatUnits(
+        this.spiRewardsBalance,
+        18
+      )
+    },
+    async changeEmissionRate() {
+      const overrides = { gasLimit: 130000 }
+
+      try {
+        const tx = await this.stakeContract.changeEmissionRate(
+          this.newEmissionRate,
+          overrides
+        )
+        if (tx.hash) {
+          this.$toast.info('Transaction submitted successfully')
+        }
+      } catch (err) {
+        if (err.message.includes('denied')) {
+          this.$toast.info('you canceled the transaction')
+        } else {
+          this.$toast.error(err.message)
+        }
+      }
+    },
+    async increaseAllowance() {
+      const overrides = { gasLimit: 130000 }
+
+      const nAllowance = EthersUtils.parseEther(this.newAllowance)
+
+      try {
+        const tx = await this.spiContract.increaseAllowance(
+          STAKE_CONTRACT_ADDR,
+          nAllowance,
+          overrides
+        )
+        if (tx.hash) {
+          this.$toast.info('Transaction submitted successfully')
+        }
+      } catch (err) {
+        if (err.message.includes('denied')) {
+          this.$toast.info('you canceled the transaction')
+        } else {
+          this.$toast.error(err.message)
+        }
+      }
+    },
+    async addRewards() {
+      const overrides = { gasLimit: 200000 }
+
+      const xRewards = EthersUtils.parseEther(this.addRewardsAmount)
+
+      try {
+        const tx = await this.stakeContract.addReward(xRewards, overrides)
+        if (tx.hash) {
+          this.$toast.info('Transaction submitted successfully')
+        }
+      } catch (err) {
+        if (err.message.includes('denied')) {
+          this.$toast.info('you canceled the transaction')
+        } else {
+          this.$toast.error(err.message)
+        }
+      }
+    },
+
+    async pause() {
+      console.log('pause button pressed')
+
+      const overrides = { gasLimit: 90000 }
+      try {
+        const tx = await this.stakeContract.pause(overrides)
+        if (tx.hash) {
+          this.$toast.info('Transaction submitted successfully')
+        }
+      } catch (err) {
+        if (err.message.includes('denied')) {
+          this.$toast.info('you canceled the transaction')
+        } else {
+          this.$toast.error(err.message)
+        }
+      }
+    },
+    async unpause() {
+      console.log('unpause button pressed')
+
+      const overrides = { gasLimit: 90000 }
+
+      try {
+        const tx = await this.stakeContract.unpause(overrides)
+        if (tx.hash) {
+          this.$toast.info('Transaction submitted successfully')
+        }
+      } catch (err) {
+        if (err.message.includes('denied')) {
+          this.$toast.info('you canceled the transaction')
+        } else {
+          this.$toast.error(err.message)
+        }
+      }
+    },
+    async checkMetamaskConnected() {
+      if (window.ethereum) {
+        await window.ethereum.enable()
+        this.ethers = new ethers.providers.Web3Provider(window.ethereum)
+
+        this.signer = this.ethers.getSigner()
+        this.account = await this.signer.getAddress()
+        this.balance = await this.signer.getBalance()
+        this.ethBalance = await ethers.utils.formatEther(this.balance)
+        this.signer = this.ethers.getSigner()
+
+        this.stakeContract = new ethers.Contract(
+          STAKE_CONTRACT_ADDR,
+          STAKING_ABI,
+          this.signer
+        )
+        this.spiContract = new ethers.Contract(
+          SPI_CONTRACT_ADDR,
+          ERC20_ABI,
+          this.signer
+        )
+
+        const chainId = this.ethers._network.chainId
+        this.$store.commit('setNetworkID', Number(chainId))
+
+        if (chainId !== 1) {
+          this.showNonMainnetWarning = true
+        }
+        this.initialize()
+      } else {
+        this.$router.push('/other/install_metamask')
+      }
+    },
+  },
+}
+</script>
+
+<style lang="scss" scoped>
+.container {
+  max-width: 1500px;
+}
+</style>
